@@ -1,0 +1,51 @@
+services:
+  apim-gateway:
+    build:
+      context: .
+      dockerfile: docker/apim.Dockerfile
+    container_name: apim-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_PROFILES_ACTIVE: local
+      LOCAL_ADMIN_TOKEN: ${LOCAL_ADMIN_TOKEN:-local-admin-token}
+      USER_SERVICE_URL: http://user-service:8081
+      ORDER_SERVICE_URL: http://order-service:8082
+      API_ALLOWED_HOSTS: user-service,order-service
+      AZURE_ENTRA_ISSUER_URI: ${AZURE_ENTRA_ISSUER_URI:-}
+      AZURE_ENTRA_JWK_SET_URI: ${AZURE_ENTRA_JWK_SET_URI:-}
+    depends_on:
+      user-service:
+        condition: service_started
+      order-service:
+        condition: service_started
+    networks:
+      - apim-net
+
+  user-service:
+    build:
+      context: .
+      dockerfile: docker/user.Dockerfile
+    container_name: user-service
+    ports:
+      - "8081:8081"
+    environment:
+      SERVER_PORT: 8081
+    networks:
+      - apim-net
+
+  order-service:
+    build:
+      context: .
+      dockerfile: docker/order.Dockerfile
+    container_name: order-service
+    ports:
+      - "8082:8082"
+    environment:
+      SERVER_PORT: 8082
+    networks:
+      - apim-net
+
+networks:
+  apim-net:
+    driver: bridge

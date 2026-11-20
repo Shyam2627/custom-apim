@@ -1,0 +1,82 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: apim-gateway
+  r2dbc:
+    url: ${SPRING_R2DBC_URL:r2dbc:h2:mem:///apim?options=DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE}
+    username: ${SPRING_R2DBC_USERNAME:sa}
+    password: ${SPRING_R2DBC_PASSWORD:}
+  sql:
+    init:
+      mode: always
+  cloud:
+    gateway:
+      httpclient:
+        connect-timeout: 2000
+        response-timeout: 5s
+      default-filters:
+        - name: Retry
+          args:
+            retries: 2
+            series: SERVER_ERROR
+            methods: GET
+            backoff:
+              firstBackoff: 200ms
+              maxBackoff: 2s
+              factor: 2
+              basedOnPreviousValue: true
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${AZURE_ENTRA_ISSUER_URI:}
+          jwk-set-uri: ${AZURE_ENTRA_JWK_SET_URI:}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: never
+  metrics:
+    tags:
+      application: ${spring.application.name}
+
+app:
+  allowed-hosts: ${API_ALLOWED_HOSTS:user-service,order-service}
+  services:
+    - id: user-service
+      path: /api/v1/users/**
+      gateway-context-path: users
+      uri: ${USER_SERVICE_URL:http://user-service:8081}
+      upstream-context-path: /users
+      strip-prefix: 3
+      required-scope: api.read
+    - id: order-service
+      path: /api/v1/orders/**
+      gateway-context-path: orders
+      uri: ${ORDER_SERVICE_URL:http://order-service:8082}
+      upstream-context-path: /orders
+      strip-prefix: 3
+      required-scope: order.read
+    - id: external-api
+      path: /api/v1/external/**
+      gateway-context-path: external
+      uri: ${EXTERNAL_API_URL:}
+      upstream-context-path: ""
+      strip-prefix: 3
+      required-scope: external.read
+      remove-authorization-header: true
+  rate-limit:
+    requests-per-minute: 100
+
+logging:
+  level:
+    root: INFO
+    com.example.apim: DEBUG
+    org.springframework.cloud.gateway: INFO
+    org.springframework.security: INFO
