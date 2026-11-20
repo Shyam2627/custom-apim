@@ -5,3 +5,7 @@ target/
 *.log
 .env
 .vscode/
+.project
+.settings/
+.classpath
+*.temp-*
