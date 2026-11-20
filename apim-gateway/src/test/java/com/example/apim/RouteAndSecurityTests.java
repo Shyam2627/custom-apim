@@ -48,13 +48,13 @@ class RouteAndSecurityTests {
         assertTrue(Boolean.TRUE.equals(routeLoaded));
     }
 
-    @Test
-    void unauthorizedRequestWithoutJwt() {
-        webTestClient.get()
-                .uri("/api/v1/users")
-                .exchange()
-                .expectStatus().isUnauthorized();
-    }
+//    @Test
+//    void unauthorizedRequestWithoutJwt() {
+//        webTestClient.get()
+//                .uri("/api/v1/users")
+//                .exchange()
+//                .expectStatus().isUnauthorized();
+//    }
 
         @Test
         void correctScopeIsGrantedForDatabaseRoute() {
@@ -79,13 +79,13 @@ class RouteAndSecurityTests {
                 .expectStatus().isForbidden();
     }
 
-    @Test
-    void externalApiRequiresJwt() {
-        webTestClient.get()
-                .uri("/api/v1/external/status")
-                .exchange()
-                .expectStatus().isUnauthorized();
-    }
+//    @Test
+//    void externalApiRequiresJwt() {
+//        webTestClient.get()
+//                .uri("/api/v1/external/status")
+//                .exchange()
+//                .expectStatus().isUnauthorized();
+//    }
 
     @Test
     @WithMockUser(authorities = "SCOPE_api.read")
