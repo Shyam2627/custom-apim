@@ -3,41 +3,49 @@ name: Deploy to Azure Container Apps
 on:
   workflow_dispatch:
     inputs:
+      deploy_user_service:
+        description: Deploy user-service
+        type: boolean
+        default: false
+      deploy_order_service:
+        description: Deploy order-service
+        type: boolean
+        default: false
+      deploy_gateway:
+        description: Deploy apim-gateway (custom-apim)
+        type: boolean
+        default: false
       allow_azure_charges:
         description: Confirm that Azure resource charges may occur
         required: true
         type: boolean
         default: false
-  push:
-    branches:
-      - main
-      - master
-
 
 permissions:
   id-token: write
   contents: read
   packages: write
 
-jobs:
-  deploy:
-    if: github.event_name != 'workflow_dispatch' || inputs.allow_azure_charges == true
-    runs-on: ubuntu-latest
-    env:
-      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
-      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
-      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP }}
-      CONTAINERAPPS_ENVIRONMENT: ${{ vars.CONTAINERAPPS_ENVIRONMENT }}
-      AZURE_ENTRA_ISSUER_URI: ${{ vars.AZURE_ENTRA_ISSUER_URI }}
-      AZURE_ENTRA_JWK_SET_URI: ${{ vars.AZURE_ENTRA_JWK_SET_URI }}
-      GHCR_REGISTRY: ghcr.io
-    steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
+env:
+  AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+  AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+  AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+  RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP }}
+  CONTAINERAPPS_ENVIRONMENT: ${{ vars.CONTAINERAPPS_ENVIRONMENT }}
+  AZURE_ENTRA_ISSUER_URI: ${{ vars.AZURE_ENTRA_ISSUER_URI }}
+  AZURE_ENTRA_JWK_SET_URI: ${{ vars.AZURE_ENTRA_JWK_SET_URI }}
+  USER_SERVICE_FQDN: user-service.ashyplant-e3e8866b.malaysiawest.azurecontainerapps.io
+  ORDER_SERVICE_FQDN: order-service.ashyplant-e3e8866b.malaysiawest.azurecontainerapps.io
 
-      - name: Set up Java 21
-        uses: actions/setup-java@v4
+jobs:
+  deploy-user-service:
+    name: Deploy user-service
+    if: inputs.allow_azure_charges == true && inputs.deploy_user_service == true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
@@ -53,43 +61,161 @@ jobs:
           tenant-id: ${{ env.AZURE_TENANT_ID }}
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Login to GitHub Container Registry
+      - name: Login to GHCR
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Normalize GHCR image names
+      - name: Build and push image
         run: |
-          echo "GHCR_OWNER=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
-          echo "GHCR_REPOSITORY=$(echo '${{ github.event.repository.name }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
+          OWNER=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
+          REPO=$(echo '${{ github.event.repository.name }}' | tr '[:upper:]' '[:lower:]')
+          IMAGE="ghcr.io/$OWNER/$REPO-user:${{ github.sha }}"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+          docker build -f docker/user.Dockerfile -t "$IMAGE" .
+          docker push "$IMAGE"
 
-      - name: Build and push GHCR images
+      - name: Deploy user-service
         run: |
-          docker build -f docker/user.Dockerfile -t ghcr.io/$GHCR_OWNER/$GHCR_REPOSITORY-user:${{ github.sha }} .
-          docker build -f docker/order.Dockerfile -t ghcr.io/$GHCR_OWNER/$GHCR_REPOSITORY-order:${{ github.sha }} .
-          docker build -f docker/apim.Dockerfile -t ghcr.io/$GHCR_OWNER/$GHCR_REPOSITORY-gateway:${{ github.sha }} .
-          docker push ghcr.io/$GHCR_OWNER/$GHCR_REPOSITORY-user:${{ github.sha }}
-          docker push ghcr.io/$GHCR_OWNER/$GHCR_REPOSITORY-order:${{ github.sha }}
-          docker push ghcr.io/$GHCR_OWNER/$GHCR_REPOSITORY-gateway:${{ github.sha }}
+          if az containerapp show --name user-service --resource-group "$RESOURCE_GROUP" >/dev/null 2>&1; then
+            az containerapp update --name user-service --resource-group "$RESOURCE_GROUP" --image "$IMAGE"
+          else
+            az containerapp create \
+              --name user-service \
+              --resource-group "$RESOURCE_GROUP" \
+              --environment "$CONTAINERAPPS_ENVIRONMENT" \
+              --image "$IMAGE" \
+              --ingress external \
+              --target-port 8081 \
+              --min-replicas 0 \
+              --max-replicas 1 \
+              --env-vars SERVER_PORT=8081
+          fi
 
-      - name: Deploy or update container apps
+  deploy-order-service:
+    name: Deploy order-service
+    if: inputs.allow_azure_charges == true && inputs.deploy_order_service == true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Build with Maven
+        run: mvn clean verify
+
+      - name: Azure login with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
         run: |
-          deploy_internal() {
-            name="$1"; image="$2"; port="$3"
-            if az containerapp show --name "$name" --resource-group "$RESOURCE_GROUP" >/dev/null 2>&1; then
-              az containerapp update --name "$name" --resource-group "$RESOURCE_GROUP" --image "$image"
-            else
-              az containerapp create --name "$name" --resource-group "$RESOURCE_GROUP" --environment "$CONTAINERAPPS_ENVIRONMENT" --image "$image" --ingress internal --target-port "$port" --min-replicas 0 --max-replicas 1 --env-vars SERVER_PORT="$port"
-            fi
-          }
+          OWNER=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
+          REPO=$(echo '${{ github.event.repository.name }}' | tr '[:upper:]' '[:lower:]')
+          IMAGE="ghcr.io/$OWNER/$REPO-order:${{ github.sha }}"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+          docker build -f docker/order.Dockerfile -t "$IMAGE" .
+          docker push "$IMAGE"
 
-          deploy_internal user-service "ghcr.io/$GHCR_OWNER/$GHCR_REPOSITORY-user:${{ github.sha }}" 8081
-          deploy_internal order-service "ghcr.io/$GHCR_OWNER/$GHCR_REPOSITORY-order:${{ github.sha }}" 8082
+      - name: Deploy order-service
+        run: |
+          if az containerapp show --name order-service --resource-group "$RESOURCE_GROUP" >/dev/null 2>&1; then
+            az containerapp update --name order-service --resource-group "$RESOURCE_GROUP" --image "$IMAGE"
+          else
+            az containerapp create \
+              --name order-service \
+              --resource-group "$RESOURCE_GROUP" \
+              --environment "$CONTAINERAPPS_ENVIRONMENT" \
+              --image "$IMAGE" \
+              --ingress external \
+              --target-port 8082 \
+              --min-replicas 0 \
+              --max-replicas 1 \
+              --env-vars SERVER_PORT=8082
+          fi
+
+  deploy-gateway:
+    name: Deploy apim-gateway
+    # Runs after the service jobs when they are selected; skipped jobs don't block it.
+    needs: [deploy-user-service, deploy-order-service]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && inputs.allow_azure_charges == true && inputs.deploy_gateway == true }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Build with Maven
+        run: mvn clean verify
+
+      - name: Azure login with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        run: |
+          OWNER=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
+          REPO=$(echo '${{ github.event.repository.name }}' | tr '[:upper:]' '[:lower:]')
+          IMAGE="ghcr.io/$OWNER/$REPO-gateway:${{ github.sha }}"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+          docker build -f docker/apim.Dockerfile -t "$IMAGE" .
+          docker push "$IMAGE"
+
+      - name: Deploy custom-apim
+        run: |
+          ENV_VARS=(
+            "USER_SERVICE_URL=https://$USER_SERVICE_FQDN"
+            "ORDER_SERVICE_URL=https://$ORDER_SERVICE_FQDN"
+            "API_ALLOWED_HOSTS=$USER_SERVICE_FQDN,$ORDER_SERVICE_FQDN"
+            "AZURE_ENTRA_ISSUER_URI=$AZURE_ENTRA_ISSUER_URI"
+            "AZURE_ENTRA_JWK_SET_URI=$AZURE_ENTRA_JWK_SET_URI"
+          )
 
           if az containerapp show --name custom-apim --resource-group "$RESOURCE_GROUP" >/dev/null 2>&1; then
-            az containerapp update --name custom-apim --resource-group "$RESOURCE_GROUP" --image "ghcr.io/$GHCR_OWNER/$GHCR_REPOSITORY-gateway:${{ github.sha }}" --set-env-vars USER_SERVICE_URL=http://user-service ORDER_SERVICE_URL=http://order-service API_ALLOWED_HOSTS=user-service,order-service AZURE_ENTRA_ISSUER_URI="$AZURE_ENTRA_ISSUER_URI" AZURE_ENTRA_JWK_SET_URI="$AZURE_ENTRA_JWK_SET_URI"
+            az containerapp update \
+              --name custom-apim \
+              --resource-group "$RESOURCE_GROUP" \
+              --image "$IMAGE" \
+              --set-env-vars "${ENV_VARS[@]}"
           else
-            az containerapp create --name custom-apim --resource-group "$RESOURCE_GROUP" --environment "$CONTAINERAPPS_ENVIRONMENT" --image "ghcr.io/$GHCR_OWNER/$GHCR_REPOSITORY-gateway:${{ github.sha }}" --ingress external --target-port 8080 --min-replicas 0 --max-replicas 1 --env-vars USER_SERVICE_URL=http://user-service ORDER_SERVICE_URL=http://order-service API_ALLOWED_HOSTS=user-service,order-service AZURE_ENTRA_ISSUER_URI="$AZURE_ENTRA_ISSUER_URI" AZURE_ENTRA_JWK_SET_URI="$AZURE_ENTRA_JWK_SET_URI"
+            az containerapp create \
+              --name custom-apim \
+              --resource-group "$RESOURCE_GROUP" \
+              --environment "$CONTAINERAPPS_ENVIRONMENT" \
+              --image "$IMAGE" \
+              --ingress external \
+              --target-port 8080 \
+              --min-replicas 0 \
+              --max-replicas 1 \
+              --env-vars "${ENV_VARS[@]}"
           fi
