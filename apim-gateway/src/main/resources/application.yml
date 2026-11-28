@@ -50,17 +50,17 @@ app:
   allowed-hosts: ${API_ALLOWED_HOSTS:user-service,order-service}
   services:
     - id: user-service
-      path: /api/v1/users/**
-      gateway-context-path: users
+      path: /api/v1/user-service/**
+      gateway-context-path: user-service
       uri: ${USER_SERVICE_URL:http://user-service:8081}
-      upstream-context-path: /users
+      upstream-context-path: /user-service
       strip-prefix: 3
       required-scope: api.read
     - id: order-service
-      path: /api/v1/orders/**
-      gateway-context-path: orders
+      path: /api/v1/order-service/**
+      gateway-context-path: order-service
       uri: ${ORDER_SERVICE_URL:http://order-service:8082}
-      upstream-context-path: /orders
+      upstream-context-path: /order-service
       strip-prefix: 3
       required-scope: order.read
     - id: external-api
@@ -74,9 +74,25 @@ app:
   rate-limit:
     requests-per-minute: 100
 
+resilience4j:
+ timelimiter:
+  instances:
+   default:
+    timeout-duration: 10s
+   typicodeCircuitBreaker:
+    timeout-duration: 10s
+
 logging:
+  file:
+   name: logs/apim-gateway.log
+  logback:
+   rollingpolicy:
+    max-file-size: 10MB
+    max-history: 7
   level:
     root: INFO
     com.example.apim: DEBUG
-    org.springframework.cloud.gateway: INFO
+    org.springframework.cloud.gateway: DEBUG
     org.springframework.security: INFO
+    reactor.netty.http.client: DEBUG
+    io.github.resilience4j: DEBUG

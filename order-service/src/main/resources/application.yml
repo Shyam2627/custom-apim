@@ -1,5 +1,7 @@
 server:
-  port: 8082
+ port: 8082
+ servlet:
+  context-path: /order-service
 
 spring:
   application:
@@ -13,3 +15,14 @@ management:
   endpoint:
     health:
       show-details: always
+
+logging:
+  file:
+   name: logs/order-service.log
+  logback:
+   rollingpolicy:
+    max-file-size: 10MB
+    max-history: 7
+   level:
+    root: INFO
+    com.example: INFO
